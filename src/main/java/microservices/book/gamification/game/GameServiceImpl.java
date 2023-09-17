@@ -2,14 +2,18 @@ package microservices.book.gamification.game;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import microservices.book.gamification.challenge.ChallengeSolvedDTO;
+import microservices.book.gamification.challenge.ChallengeSolvedEvent;
 import microservices.book.gamification.game.badgeprocessors.BadgeProcessor;
 import microservices.book.gamification.game.domain.BadgeCard;
 import microservices.book.gamification.game.domain.BadgeType;
 import microservices.book.gamification.game.domain.ScoreCard;
 import org.springframework.stereotype.Service;
 
-import java.util.*;
+import javax.transaction.Transactional;
+import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -20,31 +24,33 @@ public class GameServiceImpl implements GameService {
     private final BadgeRepository badgeRepository;
     private final List<BadgeProcessor> badgeProcessors;
 
+    @Transactional
     @Override
-    public GameResult newAttemptForUser(ChallengeSolvedDTO challenge) {
-        if (challenge.isCorrect()) {
-            ScoreCard scoreCard = new ScoreCard(challenge.getUserId(), challenge.getAttemptId());
+    public GameResult newAttemptForUser(ChallengeSolvedEvent challenge) {
+        if (challenge.correct()) {
+            ScoreCard scoreCard = new ScoreCard(challenge.userId(), challenge.attemptId());
             scoreRepository.save(scoreCard);
-            log.info("User {} scored {} points for attempt id {}", challenge.getUserAlias(), scoreCard.getScore(), challenge.getAttemptId());
+            log.info("User {} scored {} points for attempt id {}", challenge.userAlias(), scoreCard.getScore(), challenge.attemptId());
             List<BadgeCard> badgeCards = processForBadges(challenge);
-            return new GameResult(scoreCard.getScore(), badgeCards.stream().map(BadgeCard::getBadgeType).collect(Collectors.toList()));
+            return new GameResult(scoreCard.getScore(), badgeCards.stream().map(BadgeCard::getBadgeType).toList());
         } else {
-            log.info("Attempt id {} is not correct. User {} does not get score", challenge.getAttemptId(), challenge.getUserAlias());
+            log.info("Attempt id {} is not correct. User {} does not get score", challenge.attemptId(), challenge.userAlias());
             return new GameResult(0, List.of());
         }
     }
 
-    private List<BadgeCard> processForBadges(ChallengeSolvedDTO solvedChallenge) {
+    @Transactional
+    private List<BadgeCard> processForBadges(ChallengeSolvedEvent solvedChallenge) {
         Optional<Integer> optTotalScore = scoreRepository.
-                getTotalScoreForUser(solvedChallenge.getUserId());
+                getTotalScoreForUser(solvedChallenge.userId());
         if (optTotalScore.isEmpty()) return Collections.emptyList();
         int totalScore = optTotalScore.get();
 
         // Gets the total score and existing badges for that user
         List<ScoreCard> scoreCardList = scoreRepository
-                .findByUserIdOrderByScoreTimestampDesc(solvedChallenge.getUserId());
+                .findByUserIdOrderByScoreTimestampDesc(solvedChallenge.userId());
         Set<BadgeType> alreadyGotBadges = badgeRepository
-                .findByUserIdOrderByBadgeTimestampDesc(solvedChallenge.getUserId())
+                .findByUserIdOrderByBadgeTimestampDesc(solvedChallenge.userId())
                 .stream()
                 .map(BadgeCard::getBadgeType)
                 .collect(Collectors.toSet());
@@ -57,9 +63,9 @@ public class GameServiceImpl implements GameService {
                 ).flatMap(Optional::stream) // returns an empty stream if empty
                 // maps the optionals if present to new BadgeCards
                 .map(badgeType ->
-                        new BadgeCard(solvedChallenge.getUserId(), badgeType)
+                        new BadgeCard(solvedChallenge.userId(), badgeType)
                 )
-                .collect(Collectors.toList());
+                .toList();
 
         badgeRepository.saveAll(newBadgeCards);
 
